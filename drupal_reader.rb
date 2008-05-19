@@ -31,14 +31,6 @@ class DrupalReader
         #don't include a leading slash
         @baseurl = URI.parse(baseurl + '/')
 
-        #If a disqus comments file was specified, attempt to load it
-        unless disqus_comments == nil
-            File.open(disqus_comments, "r") do |file|
-                @disqus_comments = REXML::Document.new(file)
-            end
-        end
-        @disqus_comments ||= nil
-
 
         #Pre-compute the list of URL aliases so we don't hit the database with each node
         #While we're at it, precompute the reverse: a hash of URL aliases as the key, and the source URL
@@ -46,8 +38,8 @@ class DrupalReader
         @url_aliases = {}
         @url_alias_sources = {}
         DrupalModel::UrlAlias.find(:all).each do |url_alias|
-            @url_aliases[url_alias.src] = url_alias.dst
-            @url_alias_sources[url_alias.dst] = url_alias.src
+            @url_aliases[url_alias.src] = CGI.escape(url_alias.dst)
+            @url_alias_sources[url_alias.dst] = CGI.escape(url_alias.src)
         end
 
         #Do the same for users to save a UID lookup
@@ -70,6 +62,14 @@ class DrupalReader
                 @tags[tag.tid] = tag.name
             end
         end
+
+        #If a disqus comments file was specified, load the comments in advance
+        unless disqus_comments == nil
+            File.open(disqus_comments, "r") do |file|
+                @disqus_comments = load_disqus_comments(file)
+            end
+        end
+        @disqus_comments ||= nil
 
         #Look through the filters installed on the system.  If any filters associated with the markdown
         #or textile modules are encountered, preserve the format IDs the filters are associated with so we'll
@@ -113,7 +113,7 @@ class DrupalReader
         node.is_page = (node_obj.type == 'page' ? true : false)
         node.is_blog = (node_obj.type == 'blog' ? true : false)
 
-        node.root_comments = get_node_comments(node_obj)
+        node.root_comments = get_node_comments(node_obj, node.relative_url)
 
         node.attachments = get_node_attachments(node_obj)
                      
@@ -279,7 +279,7 @@ class DrupalReader
         end
     end
 
-    def get_node_comments(node)
+    def get_node_comments(node, relative_url)
         # Comments are hierarchical, but for performance reasons retrieve all comments for a node and process them recursively
         comments = node.comments
 
@@ -288,9 +288,9 @@ class DrupalReader
         comments = get_comments_for_parent(comments, 0)
 
         # If the user has specified a disqus comments XML file, pull those in as well
-        disqus_comments = get_disqus_comments_for_node(node)
+        disqus_comments = get_disqus_comments_for_node(node, relative_url)
 
-        comments.join(disqus_comments) unless disqus_comments == nil
+        comments = comments.concat(disqus_comments) unless disqus_comments == nil
 
         comments
     end
@@ -328,39 +328,15 @@ class DrupalReader
         comments
     end
 
-    def get_disqus_comments_for_node(node)
+    def get_disqus_comments_for_node(node, relative_url)
         return unless @disqus_comments != nil
 
         #Disqus comments are grouped by articles, with each article identified by the fully-qualified URL
         #of the page where the article appears.
-        @disqus_comments["//article[url='#{URI.join(@baseurl, node.relative_url)}']"].each do |article|
-            article['comments'].each do |comment|
-                comment = OpenStruct.new
+        @logger.log_trace "Getting disqus comments for article with base URL [#{@baseurl}], relative URL [#{relative_url}]"
+        article_url = URI.join(@baseurl.to_s(), relative_url)
 
-                comment.comment_id = DISQUS_COMMENT_ID
-                comment.title = DISQUS_COMMENT_SUBJECT
-
-                # Disqus comments seem to be quasi-textual, but HTML is allowed too.
-                # Out of laziness just run it through textile since that will work most of the time
-                begin
-                    comment.content = decode_content_format(comment_object.format, comment_object.comment) 
-                rescue
-                    @logger.log_exception $!, "Unable to decode content for comment ID #{comment_object.cid}.  Undecoded content will be migrated instead"
-                    comment.content = comment_object.comment
-                end
-
-                comment.hostname = comment_object.hostname
-                comment.timestamp = Time.at(comment_object.timestamp)
-                comment.is_published = comment_object.status == 0 ? true : false
-                comment.poster_name = comment_object.name
-                comment.poster_email = comment_object.mail
-                comment.poster_url = comment_object.homepage
-
-                comment.replies = get_comments_for_parent(comment_objects, comment_object.cid)
-
-                comments << comment
-            end
-        end
+        @disqus_comments[article_url.to_s()]
     end
 
     def get_node_attachments(node_obj)
@@ -386,6 +362,14 @@ class DrupalReader
         attachments
     end
 
+    def decode_disqus_comment(comment_in)
+        # Replace double newlines with <p> marks, and unescape HTML
+        comment_out = "<p>" + CGI.unescapeHTML(comment_in) + "</p>"
+        comment_out.sub!("\n\n", "</p><p>")
+
+        comment_out
+    end
+
     def decode_content_format(format, content)
         #Translate this if it's textile or markdown 
         if @textile_formats.include?(format)
@@ -407,6 +391,47 @@ class DrupalReader
         # with markdown text-to-HTML conversion
         #BlueCloth.new(RubyPants.new(markdown).to_html).to_html
         BlueCloth.new(markdown).to_html
+    end
+
+    def load_disqus_comments(file)
+        # Extracts the disqus comments from an XML file and stores them keyed by the absolute URL of the post
+        # they correspond to
+        disqus_comments = {}
+
+        doc = REXML::Document.new(file)
+
+        REXML::XPath.each(doc, "//article") do |article|
+            article_url = article.elements['url'].text
+
+            comments = []
+            article.elements.each('comments/comment') do |comment_element|
+                comment = OpenStruct.new
+
+                comment.comment_id = DISQUS_COMMENT_ID
+                comment.title = DISQUS_COMMENT_SUBJECT
+
+                # Disqus comments seem to be quasi-textual, but HTML is allowed too.
+                # HTML is escaped with &gt; and such, and mal-formed HTML isn't corrected
+                comment.content = decode_disqus_comment(comment_element.elements["message"].text)
+                comment.hostname = comment_element.elements["ip_address"].text
+                comment.timestamp = Time.parse(comment_element.elements["date"].text)
+                comment.is_published = true
+                comment.poster_name = comment_element.elements["name"].text
+                comment.poster_email = comment_element.elements["email"].text
+                comment.poster_url = comment_element.elements["url"].text
+
+                # Disqus supports threaded dicussions, but doesn't reflect the threaded structure in XML
+                # exports, sadly
+                comment.replies = []
+
+                @logger.log_trace "Loaded comment for article [#{article_url}]: #{comment.content}"
+                comments << comment
+            end
+
+            disqus_comments[article_url] = comments
+        end
+
+        disqus_comments
     end
 end
 

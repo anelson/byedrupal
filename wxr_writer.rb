@@ -44,6 +44,10 @@ class WxrWriter
         write_element("content", name, attrs, value)
     end
 
+    def write_rss_content_cdata_element(name, attrs, value)
+        write_cdata_element("content", name, attrs, value)
+    end
+
     def start_commentapi_element(name, attrs)
         start_element("wfw", name, attrs)
     end
@@ -80,6 +84,14 @@ class WxrWriter
         write_element("wp", name, attrs, value)
     end
 
+    def write_wordpress_cdata_element(name, attrs, value)
+        write_cdata_element("wp", name, attrs, value)
+    end
+
+    def write_drupal_element(name, attrs, value)
+        write_element("drupal", name, attrs, value)
+    end
+
     def write_element(ns, name, attrs, value) 
         indent_line
 
@@ -94,6 +106,36 @@ class WxrWriter
             end
         end
         @out << ">" << xmlencode(value)
+
+        @out << "</"
+        if ns
+            @out << ns << ":"
+        end
+        @out << name << ">" << "\n"
+    end
+
+    def write_cdata_element(ns, name, attrs, value) 
+        # I know what you're thinking; why is there a dedicated writer for cdata elements.
+        # The reason is the programming gods who brought you wordpress didn't feel the WXR import logic
+        # needed a proper XML parser, so they wrote the import code to 'parse' the WXR by finding
+        # occurrences of tags and sucking in all data between them.  Unfortunately, the function
+        # assumes a CDATA marker will, if present, always start immediately after the start of the element
+        # containing it, with no possibility of whitespace.  You could be forgiven for thinking an XML format
+        # built atop RSS would use, you know, XML, but you would be wrong.
+        indent_line
+
+        @out << "<"
+        if ns
+            @out << ns << ":"
+        end
+        @out << name
+        if attrs
+            attrs.each do |attrname,attrvalue|
+                @out << " " << attrname << "=\"" << xmlencode(attrvalue) << "\""
+            end
+        end
+
+        @out << "><![CDATA[" << value << "]]>"
 
         @out << "</"
         if ns
@@ -182,6 +224,7 @@ class WxrWriter
     xmlns:wfw="http://wellformedweb.org/CommentAPI/"
     xmlns:dc="http://purl.org/dc/elements/1.1/"
     xmlns:wp="http://wordpress.org/export/1.0/"
+    xmlns:drupal="http://apocryph.org/drupal"
 >
 
     <channel>

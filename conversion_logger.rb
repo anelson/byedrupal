@@ -120,10 +120,14 @@ class ConversionLogger
 
     # Like log(), but does not escape HTML reserved characters like '<' and '>'
     def log_html(log_level, msg)
+        if @log_to_stdout
+            log_to_text_file STDOUT, log_level, msg
+        end
+
         if @node_file
-            log_to_file @node_file, log_level, msg
+            log_to_html_file @node_file, log_level, msg
         else
-            log_to_file @index_file, log_level, msg
+            log_to_html_file @index_file, log_level, msg
         end
     end
 
@@ -146,9 +150,12 @@ class ConversionLogger
         @index_filename = File.join(@logdir, 'index.html')
         @index_file = File.new(@index_filename, 'w')
         
-        @log_level = opts[:log_level] || LOG_LEVEL_INFO
+        #@log_level = opts[:log_level] || LOG_LEVEL_INFO
+        @log_level = opts[:log_level] || LOG_LEVEL_TRACE
+
         @debug = @log_level >= LOG_LEVEL_DEBUG
         @trace = @log_level >= LOG_LEVEL_TRACE
+        @log_to_stdout = opts[:log_to_stdout]
 
         start_log_file @index_file, "Drupal to Wordpress Conversion Initiated #{Time.new}"
     end
@@ -255,7 +262,7 @@ EOS
         log_html level, msg
     end
 
-    def log_to_file(file, level, msg)
+    def log_to_html_file(file, level, msg)
         return unless @log_level >= level
 
         if @node_message_counts
@@ -285,6 +292,31 @@ EOS
         file << msg
         file << "</td>"
         file << "</tr>"
+        file << "\n"
+    end
+
+    def log_to_text_file(file, level, msg)
+        return unless @log_level >= level
+
+        if @node_message_counts
+            @node_message_counts[level] += 1
+        end
+
+        if level == LOG_LEVEL_ERROR
+            file << "ERROR: "
+        elsif level == LOG_LEVEL_WARNING
+            file << "WARNING: "
+        elsif level == LOG_LEVEL_INFO
+            file << "INFO: "
+        elsif level == LOG_LEVEL_DEBUG
+            file << "DEBUG: "
+        elsif level == LOG_LEVEL_TRACE
+            file << "TRACE: "
+        else
+            raise ArgumentError, "Invalid log level"
+        end
+
+        file << msg
         file << "\n"
     end
 end

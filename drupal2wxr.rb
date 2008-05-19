@@ -21,7 +21,8 @@ def parse_cmdline
         :comments_open => true,
         :pings_open => true,
         :drupal_files_path => nil,
-        :disqus_comments_file => nil
+        :disqus_comments_file => nil,
+        :log_to_stdout => false
     }
     
     opt_parser = OptionParser.new
@@ -91,6 +92,12 @@ def parse_cmdline
         "The path and file name of the XML file containing exported Disqus comments to be included in the migration.") {|val| 
             opts[:disqus_comments_file] = val
         }
+    
+    opt_parser.on("-v", 
+        "--log-to-stdout", 
+        "Enable echoing log outout to stdout") {
+            opts[:log_to_stdout] = true
+        }
 
     begin
         remaining_args = opt_parser.parse(ARGV)
@@ -147,13 +154,13 @@ end
 
 opts = parse_cmdline()
 
-ConversionLogger.do_conversion({:logdir => opts[:outdir]}) do |logger|
+ConversionLogger.do_conversion({:logdir => opts[:outdir], :log_to_stdout => opts[:log_to_stdout]}) do |logger|
     reader = DrupalReader.new(opts[:dbhost],
         opts[:dbusername],
         opts[:dbpassword],
         opts[:dbname],
         opts[:baseurl],
-        opts[:disqus_comments_file]
+        opts[:disqus_comments_file],
         logger)
 
     if !File.exists?(opts[:outdir])

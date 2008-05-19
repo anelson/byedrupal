@@ -15,6 +15,8 @@ class DrupalToWxrConverter
         @logger = logger
         @opts = options
         @node_errors = {}
+        @next_post_id = 0
+        @next_comment_id = 0
     end
 
     def run
@@ -29,6 +31,7 @@ class DrupalToWxrConverter
             else
                 @writer.write_rss_element("language", nil, @reader.default_locale)
             end
+            @writer.write_wordpress_element("wxr_version", nil, "1.0")
 
             output_migrated_cat()            
             @reader.each_category do |cat|
@@ -112,11 +115,11 @@ class DrupalToWxrConverter
                 @writer.write_dublincore_element("guid", {"isPermalink" => "false"}, node_canonical_abs_url)
                 @writer.write_rss_element("description", nil, "")
     
-                @writer.start_rss_content_element("encoded", nil)
-                    @writer.write_cdata_value(node.content)
-                @writer.end_rss_content_element("encoded")
+                @writer.write_rss_content_cdata_element("encoded", nil, node.content)
 
-                @writer.write_wordpress_element("post_id", nil, node.node_id)
+                @writer.write_drupal_element("drupal_node_id", nil, node.node_id)
+                node.wordpress_post_id = get_next_post_id()
+                @writer.write_wordpress_element("post_id", nil, node.wordpress_post_id)
                 @writer.write_wordpress_element("post_date", nil, node.created.strftime(WORDPRESS_DATE_FORMAT))
                 @writer.write_wordpress_element("post_date_gmt", nil, node.created.utc.strftime(WORDPRESS_DATE_FORMAT))
                 @writer.write_wordpress_element("comment_status", nil, (@opts[:comments_open] ? "open" : "closed"))
@@ -125,7 +128,8 @@ class DrupalToWxrConverter
                 @writer.write_wordpress_element("status", nil, node.is_published ? "publish" : "draft")
                 @writer.write_wordpress_element("post_parent", nil, "0")
                 @writer.write_wordpress_element("menu_order", nil, "0")
-                @writer.write_wordpress_element("post_type", nil, node.is_page ? "page" : "blog")
+                @writer.write_wordpress_element("post_type", nil, node.is_page ? "page" : "post")
+                @writer.write_wordpress_element("post_password", nil, "")
                 if node.is_page
                     @writer.start_wordpress_element("postmeta", nil)
                         @writer.write_wordpress_element("meta_key", nil, "_wp_page_template")
@@ -148,21 +152,22 @@ class DrupalToWxrConverter
 
     def output_comment(node, comment, reply_to_comment)
         @writer.start_wordpress_element("comment", nil)
-            @writer.write_wordpress_element("comment_id", nil, comment.comment_id)
+            if comment.comment_id != DrupalReader::DISQUS_COMMENT_ID
+                @writer.write_drupal_element("drupal_comment_id", nil, comment.comment_id)
+            end
+            @writer.write_wordpress_element("comment_id", nil, get_next_comment_id)
             @writer.write_wordpress_element("comment_author", nil, comment.poster_name)
             @writer.write_wordpress_element("comment_author_email", nil, comment.poster_email)
             @writer.write_wordpress_element("comment_author_url", nil, comment.poster_url)
             @writer.write_wordpress_element("comment_author_IP", nil, comment.hostname)
             @writer.write_wordpress_element("comment_date", nil, comment.timestamp.strftime(WORDPRESS_DATE_FORMAT))
             @writer.write_wordpress_element("comment_date_gmt", nil, comment.timestamp.utc.strftime(WORDPRESS_DATE_FORMAT))
-            @writer.start_wordpress_element("comment_content", nil)
-                content = comment.content
-                if comment.title.length > 0
-                    #WordPress doesn't have a field for comment subject, so inject it into the body
-                    content = "<p>Subject: #{comment.title}</p>\n" + content
-                end
-                @writer.write_cdata_value(content)
-            @writer.end_wordpress_element("comment_content")
+            content = comment.content
+            if comment.title.length > 0
+                #WordPress doesn't have a field for comment subject, so inject it into the body
+                content = "<p>Subject: #{comment.title}</p>\n" + content
+            end
+            @writer.write_wordpress_cdata_element("comment_content", nil, content)
             @writer.write_wordpress_element("comment_approved", nil, comment.is_published ? "1" : "0")
             @writer.write_wordpress_element("comment_type", nil, "")
             @writer.write_wordpress_element("comment_parent", nil, (reply_to_comment == nil ? 0 : reply_to_comment.comment_id))
@@ -185,20 +190,18 @@ class DrupalToWxrConverter
             @writer.write_dublincore_element("guid", {"isPermalink" => "false"}, attachment_abs_url)
             @writer.write_rss_element("description", nil, attachment.description)
 
-            @writer.start_rss_content_element("encoded", nil)
-                @writer.write_cdata_value("")
-            @writer.end_rss_content_element("encoded")
+            @writer.write_rss_content_element("encoded", nil, "")
 
-            # NB: attachment IDs and node IDs are independent, so using both for the post ID could lead to collissions
-            # Thus, add a huge number to the attachment ID to keep it unique
-            @writer.write_wordpress_element("post_id", nil, 2000000000 + attachment.attachment_id)
+            @writer.write_drupal_element("drupal_attachment_id", nil, attachment.attachment_id)
+            attachment.wordpress_post_id = get_next_post_id
+            @writer.write_wordpress_element("post_id", nil, attachment.wordpress_post_id)
             @writer.write_wordpress_element("post_date", nil, node.created.strftime(WORDPRESS_DATE_FORMAT))
             @writer.write_wordpress_element("post_date_gmt", nil, node.created.utc.strftime(WORDPRESS_DATE_FORMAT))
             @writer.write_wordpress_element("comment_status", nil, (@opts[:comments_open] ? "open" : "closed"))
             @writer.write_wordpress_element("ping_status", nil, (@opts[:pings_open] ? "open" : "closed"))
             @writer.write_wordpress_element("post_name", nil, File.basename(attachment.filename, File.extname(attachment.filename)))
             @writer.write_wordpress_element("status", nil, "inherit")
-            @writer.write_wordpress_element("post_parent", nil, node.node_id)
+            @writer.write_wordpress_element("post_parent", nil, node.wordpress_post_id)
             @writer.write_wordpress_element("menu_order", nil, "0")
             @writer.write_wordpress_element("post_type", nil, "attachment")
             @writer.start_wordpress_element("postmeta", nil)
@@ -239,5 +242,15 @@ class DrupalToWxrConverter
         rescue URI::InvalidURIError
             @logger.log_warning "Link '#{link}' is not a valid URL"
         end
+    end
+
+    def get_next_post_id
+        @next_post_id += 1
+        @next_post_id
+    end
+
+    def get_next_comment_id
+        @next_comment_id += 1
+        @next_comment_id
     end
 end
