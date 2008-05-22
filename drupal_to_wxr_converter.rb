@@ -96,6 +96,13 @@ class DrupalToWxrConverter
             node_abs_url = @opts[:baseurl] + "/" + node.relative_url
             node_canonical_abs_url = @opts[:baseurl] + "/" + node.canonical_relative_url
 
+            #If the node's relative URL is the same as the node's canonical relative URL (which is of the form node/[nodeid],
+            #then the wordpress version of the node's URL will be different, since WP doesn't support forward-slashes
+            #in post names.  Fix it now
+            if node.relative_url == node.canonical_relative_url
+                node.relative_url.gsub!('/', '-')
+            end
+
             @logger.log_info_html "Processing node <a href='#{node_abs_url}'>#{XmlEscape::escape(node.title)}</a>"
 
             #Pull all the URLs out of the content and make sure they're either external references
@@ -115,7 +122,7 @@ class DrupalToWxrConverter
                 @writer.write_dublincore_element("guid", {"isPermalink" => "false"}, node_canonical_abs_url)
                 @writer.write_rss_element("description", nil, "")
     
-                @writer.write_rss_content_cdata_element("encoded", nil, node.content)
+                @writer.write_rss_content_cdata_element("encoded", nil, postprocess_node_content(node.content))
 
                 @writer.write_drupal_element("drupal_node_id", nil, node.node_id)
                 node.wordpress_post_id = get_next_post_id()
@@ -163,11 +170,11 @@ class DrupalToWxrConverter
             @writer.write_wordpress_element("comment_date", nil, comment.timestamp.strftime(WORDPRESS_DATE_FORMAT))
             @writer.write_wordpress_element("comment_date_gmt", nil, comment.timestamp.utc.strftime(WORDPRESS_DATE_FORMAT))
             content = comment.content
-            if comment.title.length > 0
+            if comment.title != nil && comment.title != DrupalReader::DISQUS_COMMENT_SUBJECT
                 #WordPress doesn't have a field for comment subject, so inject it into the body
-                content = "<p>Subject: #{comment.title}</p>\n" + content
+                content = "<strong>#{comment.title}</strong>\n\n" + (content || '')
             end
-            @writer.write_wordpress_cdata_element("comment_content", nil, content)
+            @writer.write_wordpress_cdata_element("comment_content", nil, postprocess_node_content(content))
             @writer.write_wordpress_element("comment_approved", nil, comment.is_published ? "1" : "0")
             @writer.write_wordpress_element("comment_type", nil, "")
             @writer.write_wordpress_element("comment_parent", nil, (reply_to_comment == nil ? 0 : reply_to_comment.comment_id))
@@ -204,19 +211,7 @@ class DrupalToWxrConverter
             @writer.write_wordpress_element("post_parent", nil, node.wordpress_post_id)
             @writer.write_wordpress_element("menu_order", nil, "0")
             @writer.write_wordpress_element("post_type", nil, "attachment")
-            @writer.start_wordpress_element("postmeta", nil)
-                attachment_local_file_path = @opts[:drupal_files_path] + '/' + attachment.filepath
-
-                @writer.write_wordpress_element("meta_key", nil, "_wp_attached_file")
-                @writer.write_wordpress_element("meta_value", nil, attachment_local_file_path)
-
-                @writer.write_wordpress_element("meta_key", nil, "_wp_attachment_metadata")
-                # The attachment metadata is a serialized PHP array with some name/value pairs.  
-                # Images include dimension metadata in the NVP as well as the filename of the thumbnail version
-                # I'm hoping I don't have to do that here.  I'll just include the repetition of the file path
-                metadata = {"file" => attachment_local_file_path}
-                @writer.write_wordpress_element("meta_value", nil, PHP.serialize(metadata))
-            @writer.end_wordpress_element("postmeta")
+            @writer.write_wordpress_element("attachment_url", nil, attachment_abs_url)
         @writer.end_rss_element("item")
     end
 
@@ -225,23 +220,52 @@ class DrupalToWxrConverter
         #or links to existing internal content.  If any are broken, warn
         doc = Hpricot(node.content)
         doc.search('//a[@href]') do |link| 
-            verify_node_link(node, node_abs_url, link.attributes['href'])
+            link[:href] = verify_node_link(node, node_abs_url, link[:href])
         end
 
         doc.search('//img[@src]') do |img|
-            verify_node_link(node, node_abs_url, img.attributes['src'])
+            img[:src] = verify_node_link(node, node_abs_url, img[:src])
         end
+
+        node.content = doc.to_html
     end
 
     def verify_node_link(node, node_abs_url, link)
+        link = clean_url(link)
+
+        rewritten_link = link
         begin
-            if @reader.is_internal_url(node_abs_url, link) &&
-               !@reader.does_internal_url_exist(node_abs_url, link)
-               @logger.log_warning "Link '#{link}' looks like an internal site link but it doesn't correspond to any Drupal content"
+            if @reader.is_internal_url(node_abs_url, link)
+                internal_obj_abs_url = @reader.get_internal_object_url_from_url(node_abs_url, link)
+
+                if internal_obj_abs_url == nil
+                    @logger.log_warning "Link '#{link}' looks like an internal site link but it doesn't correspond to any Drupal content"
+                else
+                    #Convert this link to be relative to the node's absolute URL
+                    rewritten_link = URI.parse(node_abs_url).route_to(internal_obj_abs_url)
+
+                    #If this is a link by node id (of the form node/[nodeid], must replace
+                    #the / with a - since the wordpress url will use a hyphen instead
+                    if rewritten_link.path =~ /node\/(\d)+$/
+                        rewritten_link.path = rewritten_link.path.sub(/node\/(\d)+$/, '\1')
+                    end
+
+                    rewritten_link = rewritten_link.to_s()
+                end
             end
         rescue URI::InvalidURIError
             @logger.log_warning "Link '#{link}' is not a valid URL"
         end
+
+        if rewritten_link != link
+            @logger.log_trace "Changed link to '#{link}' to '#{rewritten_link}'"
+        end
+                
+        rewritten_link
+    end
+
+    def clean_url(link)
+        link.gsub(' ', '+')
     end
 
     def get_next_post_id
@@ -252,5 +276,14 @@ class DrupalToWxrConverter
     def get_next_comment_id
         @next_comment_id += 1
         @next_comment_id
+    end
+
+    def postprocess_node_content(content_in)
+        #It seems WordPress expects the raw 'HTML' content of its posts to use blank lines in place of <p> marks
+        #The Drupal content, after it's post-processed by textile or markdown, uses <p> elements.  Just strip all the <P>
+        #elements
+        #content_in.sub(/<\/?p>/i, '')
+        return nil unless content_in != nil
+        content_in.gsub(/<\/?p>/i, '')
     end
 end

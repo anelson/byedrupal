@@ -143,6 +143,13 @@ class DrupalReader
     ### is_internal_url), looks for a node or file attachment at that URL
     ### If nothing is found, returns false, else returns true
     def does_internal_url_exist(parent_url, url)
+        get_internal_object_from_url(parent_url, url) != nil
+    end
+
+    ### Given a URL that points to somewhere on the Drupal site (according to
+    ### is_internal_url), looks for a node or file attachment at that URL
+    ### If nothing is found, returns nil, else returns the absolute URL of the object
+    def get_internal_object_url_from_url(parent_url, url)
         # Compute the URL of this content relative to the base URL of the site
         relative_url = get_url_relative_to_base(parent_url, url)
         @logger.log_trace "Route to '#{url}' from '#{@baseurl}' is '#{relative_url}'"
@@ -154,26 +161,26 @@ class DrupalReader
             node = DrupalModel::Node.find(:first, :conditions => {:nid => node_id})
             if node != nil
                 @logger.log_trace "Url '#{url}' points to node ID #{node_id}"
-                true
+                @baseurl.merge("node/#{node_id}")
             else
                 @logger.log_trace "Url '#{url}' points to non-existent node ID #{node_id}"
-                false
+                nil
             end
         else
             #Doesn't look like a node URL.  Look for a URL alias
             if @url_alias_sources.has_key?(relative_url.path)
                @logger.log_trace "URL '#{relative_url.path}' corresponds to a URL alias"
-                true
+                @baseurl.merge(relative_url.path)
             elsif @files.has_key?(CGI.unescape(relative_url.path))
                 #Only other thing it could be is a file attachment. 
                 @logger.log_trace "URL '#{relative_url}' corresponds to a file attachment"
-                true
+                @baseurl.merge(relative_url.path)
             elsif relative_url.to_s.length == 0
                 #This is a link back to the main site
-                true
+                @baseurl
             else
                 @logger.log_trace "URL '#{relative_url}' doesn't correspond to any Drupal content"
-                false
+                nil
             end
         end
     end
@@ -264,6 +271,9 @@ class DrupalReader
     def get_node_content(node)
         rev = get_latest_node_revision(node)
         if rev
+            #Strip the break marker <!--break--> .  I can't figure out where in the WXR the excerpt goes so there's no way to preserve this
+            #in the wordpress export, and if we don't strip it it might get interpreted as markdown 
+            rev.body.sub!('<!--break-->', '')
             decode_content_format(rev.format, rev.body)
         else
             nil
@@ -310,6 +320,14 @@ class DrupalReader
                 rescue
                     @logger.log_exception $!, "Unable to decode content for comment ID #{comment_object.cid}.  Undecoded content will be migrated instead"
                     comment.content = comment_object.comment
+                end
+
+                #If the user didn't type a title, Drupal uses the first few words from the body, stripped of any markup.  
+                #In that case, there is no title
+                if comment.content != nil &&
+                    comment.content.length >= comment.title.length &&
+                    comment.title == comment.content.gsub(/<\/?[^>]*>/, "")[0..comment.title.length-1]
+                    comment.title = nil
                 end
 
                 comment.hostname = comment_object.hostname
@@ -365,9 +383,7 @@ class DrupalReader
     def decode_disqus_comment(comment_in)
         # Replace double newlines with <p> marks, and unescape HTML
         comment_out = "<p>" + CGI.unescapeHTML(comment_in) + "</p>"
-        comment_out.sub!("\n\n", "</p><p>")
-
-        comment_out
+        comment_out.gsub!("\n\n", "</p>\n\n<p>")
     end
 
     def decode_content_format(format, content)

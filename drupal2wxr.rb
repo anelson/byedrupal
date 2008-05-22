@@ -20,7 +20,6 @@ def parse_cmdline
         :outdir => "./drupal2wrx-#{Time.new.strftime('%Y-%m-%d-%H-%M-%S')}",
         :comments_open => true,
         :pings_open => true,
-        :drupal_files_path => nil,
         :disqus_comments_file => nil,
         :log_to_stdout => false
     }
@@ -81,12 +80,6 @@ def parse_cmdline
             opts[:pings_open] = false
         }
     
-    opt_parser.on("-d", 
-        "--drupal-files-path PATH", 
-        "The path on the machine hosting WordPress where the drupal 'files' folder has been copied.") {|val| 
-            opts[:drupal_files_path] = val
-        }
-    
     opt_parser.on("-c", 
         "--disqus-comments-file PATH", 
         "The path and file name of the XML file containing exported Disqus comments to be included in the migration.") {|val| 
@@ -136,11 +129,6 @@ def parse_cmdline
 
     if !opts[:baseurl]
         puts "You must specify a base URL"
-        exit(-1)
-    end
-
-    if !opts[:drupal_files_path]
-        puts "You must specify a drupal files path"
         exit(-1)
     end
 
