@@ -52,6 +52,10 @@ class ConversionLogger
         end_node_log
     end
 
+    def message_count(log_level)
+        @node_message_counts[log_level]
+    end
+
     def index_filename
         @index_filename
     end
@@ -150,8 +154,7 @@ class ConversionLogger
         @index_filename = File.join(@logdir, 'index.html')
         @index_file = File.new(@index_filename, 'w')
         
-        #@log_level = opts[:log_level] || LOG_LEVEL_INFO
-        @log_level = opts[:log_level] || LOG_LEVEL_TRACE
+        @log_level = opts[:log_level] || LOG_LEVEL_INFO
 
         @debug = @log_level >= LOG_LEVEL_DEBUG
         @trace = @log_level >= LOG_LEVEL_TRACE

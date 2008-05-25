@@ -32,6 +32,10 @@ class WxrWriter
         write_element(nil, name, attrs, value)
     end
 
+    def write_rss_cdata_element(name, attrs, value)
+        write_cdata_element(nil, name, attrs, value)
+    end
+
     def start_rss_content_element(name, attrs)
         start_element("content", name, attrs)
     end
@@ -76,16 +80,32 @@ class WxrWriter
         start_element("wp", name, attrs)
     end
 
+    def start_wordpress_element_nonewline(name, attrs)
+        start_element_nonewline("wp", name, attrs)
+    end
+
     def end_wordpress_element(name)
         end_element("wp", name)
+    end
+
+    def end_wordpress_element_nonewline(name)
+        end_element_nonewline("wp", name)
     end
 
     def write_wordpress_element(name, attrs, value)
         write_element("wp", name, attrs, value)
     end
 
+    def write_wordpress_element_nonewline(name, attrs, value)
+        write_element_nonewline("wp", name, attrs, value)
+    end
+
     def write_wordpress_cdata_element(name, attrs, value)
         write_cdata_element("wp", name, attrs, value)
+    end
+
+    def write_wordpress_cdata_element_nonewline(name, attrs, value)
+        write_cdata_element_nonewline("wp", name, attrs, value)
     end
 
     def write_drupal_element(name, attrs, value)
@@ -95,6 +115,12 @@ class WxrWriter
     def write_element(ns, name, attrs, value) 
         indent_line
 
+        write_element_nonewline(ns, name, attrs, value)
+
+        @out << "\n"
+    end
+
+    def write_element_nonewline(ns, name, attrs, value) 
         @out << "<"
         if ns
             @out << ns << ":"
@@ -111,7 +137,7 @@ class WxrWriter
         if ns
             @out << ns << ":"
         end
-        @out << name << ">" << "\n"
+        @out << name << ">"
     end
 
     def write_cdata_element(ns, name, attrs, value) 
@@ -124,6 +150,19 @@ class WxrWriter
         # built atop RSS would use, you know, XML, but you would be wrong.
         indent_line
 
+        write_cdata_element_nonewline(ns, name, attrs, value)
+
+        @out << "\n"
+    end
+
+    def write_cdata_element_nonewline(ns, name, attrs, value) 
+        # I know what you're thinking; why is there a dedicated writer for cdata elements.
+        # The reason is the programming gods who brought you wordpress didn't feel the WXR import logic
+        # needed a proper XML parser, so they wrote the import code to 'parse' the WXR by finding
+        # occurrences of tags and sucking in all data between them.  Unfortunately, the function
+        # assumes a CDATA marker will, if present, always start immediately after the start of the element
+        # containing it, with no possibility of whitespace.  You could be forgiven for thinking an XML format
+        # built atop RSS would use, you know, XML, but you would be wrong.
         @out << "<"
         if ns
             @out << ns << ":"
@@ -141,7 +180,7 @@ class WxrWriter
         if ns
             @out << ns << ":"
         end
-        @out << name << ">" << "\n"
+        @out << name << ">"
     end
 
     def write_text_value(value)
@@ -161,6 +200,14 @@ class WxrWriter
     end
 
     def start_element(ns, name, attrs)
+        start_element_nonewline(ns, name, attrs)
+
+        @out << "\n"
+
+        @indent += 1
+    end
+
+    def start_element_nonewline(ns, name, attrs)
         indent_line
 
         @out << "<"
@@ -173,9 +220,7 @@ class WxrWriter
                 @out << " " << attrname << "=\"" << xmlencode(attrvalue) << "\""
             end
         end
-        @out << ">" << "\n"
-
-        @indent += 1
+        @out << ">"
     end
 
     def end_element(ns, name)
@@ -183,11 +228,17 @@ class WxrWriter
 
         indent_line
 
+        end_element_nonewline(ns, name)
+    end
+
+    def end_element_nonewline(ns, name)
         @out << "</"
         if ns
             @out << ns << ":"
         end
-        @out << name << ">" << "\n"
+        @out << name << ">"
+
+        @out  << "\n"
 
     end
 

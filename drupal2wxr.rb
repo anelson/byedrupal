@@ -5,10 +5,6 @@ require 'drupal_to_wxr_converter'
 require 'drupal_model'
 require 'conversion_logger'
 
-MIGRATED_CAT_NAME = "Migrated from Drupal"
-MIGRATED_CAT_NICE_NAME = "migrated_from_drupal"
-
-
 def parse_cmdline
     opts = {
         :dbhost => nil,
@@ -21,7 +17,9 @@ def parse_cmdline
         :comments_open => true,
         :pings_open => true,
         :disqus_comments_file => nil,
-        :log_to_stdout => false
+        :log_to_stdout => false,
+        :wp_uploads_url => 'wp-content/uploads/%year%/%month%',
+        :log_level => ConversionLogger::LOG_LEVEL_INFO
     }
     
     opt_parser = OptionParser.new
@@ -91,6 +89,18 @@ def parse_cmdline
         "Enable echoing log outout to stdout") {
             opts[:log_to_stdout] = true
         }
+    
+    opt_parser.on("", 
+        "--wp-uploads-url URL", 
+        "The relative URL prefix to apply to all Drupal file attachments migrated as Wordpress uploads.  Defaults to #{opts[:wp_uploads_url]}") {|val| 
+            opts[:wp_uploads_url] = val
+        }
+    
+    opt_parser.on("", 
+        "--debug", 
+        "Increase the log level.  Repeat for even more debug output") {
+            opts[:log_level] += 1
+        }
 
     begin
         remaining_args = opt_parser.parse(ARGV)
@@ -142,7 +152,7 @@ end
 
 opts = parse_cmdline()
 
-ConversionLogger.do_conversion({:logdir => opts[:outdir], :log_to_stdout => opts[:log_to_stdout]}) do |logger|
+ConversionLogger.do_conversion({:logdir => opts[:outdir], :log_to_stdout => opts[:log_to_stdout], :log_level => opts[:log_level]}) do |logger|
     reader = DrupalReader.new(opts[:dbhost],
         opts[:dbusername],
         opts[:dbpassword],

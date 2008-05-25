@@ -63,6 +63,9 @@ class DrupalReader
             end
         end
 
+        #Pre-fetch the site node count
+        @num_nodes = DrupalModel::Node.count(:all)
+
         #If a disqus comments file was specified, load the comments in advance
         unless disqus_comments == nil
             File.open(disqus_comments, "r") do |file|
@@ -154,6 +157,11 @@ class DrupalReader
         relative_url = get_url_relative_to_base(parent_url, url)
         @logger.log_trace "Route to '#{url}' from '#{@baseurl}' is '#{relative_url}'"
 
+        if !relative_url.relative?
+            @logger.log_trace("URL #{url} is not relative to #{@baseurl} so returning nil for internal object URL")
+            return nil
+        end
+
         # If this is a node/<nodeid> URL, look for a node with that ID
         if relative_url.path =~ /node\/(\d+)/
             node_id = $1.to_i()
@@ -161,7 +169,14 @@ class DrupalReader
             node = DrupalModel::Node.find(:first, :conditions => {:nid => node_id})
             if node != nil
                 @logger.log_trace "Url '#{url}' points to node ID #{node_id}"
-                @baseurl.merge("node/#{node_id}")
+                #If there's a URL alias for this node, use that, else just use the raw node URL
+                if @url_aliases.has_key?(relative_url.path)
+                    @logger.log_trace("URL '#{url}' node ID #{node_id} has URL alias '#{@url_aliases[relative_url.path]}'; using alias for node URL")
+                    @baseurl.merge(@url_aliases[relative_url.path])
+                else
+                    @logger.log_trace("URL '#{url}' node ID #{node_id} does not have a URL alias; using raw node URL")
+                    @baseurl.merge(relative_url.path)
+                end
             else
                 @logger.log_trace "Url '#{url}' points to non-existent node ID #{node_id}"
                 nil
@@ -169,7 +184,7 @@ class DrupalReader
         else
             #Doesn't look like a node URL.  Look for a URL alias
             if @url_alias_sources.has_key?(relative_url.path)
-               @logger.log_trace "URL '#{relative_url.path}' corresponds to a URL alias"
+                @logger.log_trace "URL '#{relative_url.path}' corresponds to a URL alias"
                 @baseurl.merge(relative_url.path)
             elsif @files.has_key?(CGI.unescape(relative_url.path))
                 #Only other thing it could be is a file attachment. 
@@ -183,6 +198,16 @@ class DrupalReader
                 nil
             end
         end
+    end
+
+    # Given a URL relative to the base URL of the Drupal site, determines if the given URL
+    # corresponds to a Drupal file attachment
+    def is_internal_url_file_attachment(relative_url)
+        #The URL may or may not have things like spaces and such escaped out, but in the Drupal
+        #database such things are never escaped
+        relative_url = CGI.unescape(relative_url)
+
+        return @files.has_key?(relative_url)
     end
 
     ### Given a URL encountered within a page with URL parent_url, returns
@@ -239,6 +264,10 @@ class DrupalReader
             # Default to en
             "en"
         end
+    end
+
+    def num_nodes
+        @num_nodes
     end
 
     def each_tag(&block)
