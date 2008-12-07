@@ -413,6 +413,8 @@ class DrupalReader
         # Replace double newlines with <p> marks, and unescape HTML
         comment_out = "<p>" + CGI.unescapeHTML(comment_in) + "</p>"
         comment_out.gsub!("\n\n", "</p>\n\n<p>")
+
+        comment_out
     end
 
     def decode_content_format(format, content)
